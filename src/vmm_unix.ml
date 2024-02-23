@@ -153,41 +153,47 @@ let rec fifo_exists file =
     Error (`Msg (Fmt.str "file %a exists: %s" Fpath.pp file
                    (Unix.error_message e)))
 
+let bridge_is_fd bridge = bridge.[0] = '@'
+
 let create_tap bridge =
-  match Lazy.force uname with
-  | FreeBSD ->
-    let cmd = Bos.Cmd.(v "ifconfig" % "tap" % "create") in
-    let* name = Bos.OS.Cmd.(run_out cmd |> out_string |> success) in
-    let* () = Bos.OS.Cmd.run Bos.Cmd.(v "ifconfig" % bridge % "addm" % name) in
-    Ok name
-  | Linux ->
-    let* taps = Bos.(OS.Cmd.(run_out Cmd.(v "ip" % "tuntap" % "show") |> out_lines |> success)) in
-    let prefix = "vmmtap" in
-    let plen = String.length prefix in
-    let num acc n =
-      let nlen = String.length n in
-      if nlen > plen then
-        match String.split_on_char ':' (String.sub n plen (nlen - plen)) with
-        | x :: _ -> (try IS.add (int_of_string x) acc with Failure _ -> acc)
-        | _ -> acc
-      else
-        acc
-    in
-    let taps = List.fold_left num IS.empty taps in
-    let rec find_n x = if IS.mem x taps then find_n (succ x) else x in
-    let tap = prefix ^ string_of_int (find_n 0) in
-    let* () = Bos.OS.Cmd.run Bos.Cmd.(v "ip" % "tuntap" % "add" % tap % "mode" % "tap") in
-    let* () = Bos.OS.Cmd.run Bos.Cmd.(v "ip" % "link" % "set" % "dev" % tap % "up") in
-    let* () = Bos.OS.Cmd.run Bos.Cmd.(v "ip" % "link" % "set" % "dev" % tap % "master" % bridge) in
-    Ok tap
+  if bridge_is_fd bridge then Ok bridge
+  else
+    match Lazy.force uname with
+    | FreeBSD ->
+      let cmd = Bos.Cmd.(v "ifconfig" % "tap" % "create") in
+      let* name = Bos.OS.Cmd.(run_out cmd |> out_string |> success) in
+      let* () = Bos.OS.Cmd.run Bos.Cmd.(v "ifconfig" % bridge % "addm" % name) in
+      Ok name
+    | Linux ->
+      let* taps = Bos.(OS.Cmd.(run_out Cmd.(v "ip" % "tuntap" % "show") |> out_lines |> success)) in
+      let prefix = "vmmtap" in
+      let plen = String.length prefix in
+      let num acc n =
+        let nlen = String.length n in
+        if nlen > plen then
+          match String.split_on_char ':' (String.sub n plen (nlen - plen)) with
+          | x :: _ -> (try IS.add (int_of_string x) acc with Failure _ -> acc)
+          | _ -> acc
+        else
+          acc
+      in
+      let taps = List.fold_left num IS.empty taps in
+      let rec find_n x = if IS.mem x taps then find_n (succ x) else x in
+      let tap = prefix ^ string_of_int (find_n 0) in
+      let* () = Bos.OS.Cmd.run Bos.Cmd.(v "ip" % "tuntap" % "add" % tap % "mode" % "tap") in
+      let* () = Bos.OS.Cmd.run Bos.Cmd.(v "ip" % "link" % "set" % "dev" % tap % "up") in
+      let* () = Bos.OS.Cmd.run Bos.Cmd.(v "ip" % "link" % "set" % "dev" % tap % "master" % bridge) in
+      Ok tap
 
 let destroy_tap tap =
-  let cmd =
-    match Lazy.force uname with
-    | FreeBSD -> Bos.Cmd.(v "ifconfig" % tap % "destroy")
-    | Linux -> Bos.Cmd.(v "ip" % "tuntap" % "del" % "dev" % tap % "mode" % "tap")
-  in
-  Bos.OS.Cmd.run cmd
+  if bridge_is_fd tap then Ok ()
+  else
+    let cmd =
+      match Lazy.force uname with
+      | FreeBSD -> Bos.Cmd.(v "ifconfig" % tap % "destroy")
+      | Linux -> Bos.Cmd.(v "ip" % "tuntap" % "del" % "dev" % tap % "mode" % "tap")
+    in
+    Bos.OS.Cmd.run cmd
 
 let owee_buf_of_cstruct cs =
   let buf = Bigarray.Array1.create Bigarray.Int8_unsigned Bigarray.c_layout (Cstruct.length cs) in
@@ -284,14 +290,16 @@ let manifest_devices_match ~bridges ~block_devices image =
 let bridge_name (service, b, _mac) = match b with None -> service | Some b -> b
 
 let bridge_exists bridge_name =
-  let cmd =
-    match Lazy.force uname with
-    | FreeBSD -> Bos.Cmd.(v "ifconfig" % bridge_name)
-    | Linux -> Bos.Cmd.(v "ip" % "link" % "show" % bridge_name)
-  in
-  Result.map_error
-    (fun _e -> `Msg (Fmt.str "interface %s does not exist" bridge_name))
-    (Bos.OS.Cmd.(run_out ~err:err_null cmd |> out_null |> success))
+  if bridge_is_fd bridge_name then Ok ()
+  else
+    let cmd =
+      match Lazy.force uname with
+      | FreeBSD -> Bos.Cmd.(v "ifconfig" % bridge_name)
+      | Linux -> Bos.Cmd.(v "ip" % "link" % "show" % bridge_name)
+    in
+    Result.map_error
+      (fun _e -> `Msg (Fmt.str "interface %s does not exist" bridge_name))
+      (Bos.OS.Cmd.(run_out ~err:err_null cmd |> out_null |> success))
 
 let bridges_exist bridges =
   List.fold_left
