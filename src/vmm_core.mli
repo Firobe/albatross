@@ -112,7 +112,7 @@ module Policy : sig
 end
 
 module Unikernel : sig
-  type typ = [ `Solo5 | `BHyve ]
+  type typ = [ `Solo5 | `BHyve | `Qemu]
   val pp_typ : typ Fmt.t
 
   type fail_behaviour = [ `Quit | `Restart of IS.t option ]

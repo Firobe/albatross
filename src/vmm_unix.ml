@@ -9,6 +9,7 @@ let dbdir = ref (Fpath.v "/nonexisting")
 let set_dbdir path = dbdir := path
 
 type supported = FreeBSD | Linux
+type arch = X86_64 | Aarch64
 
 let uname =
   let cmd = Bos.Cmd.(v "uname" % "-s") in
@@ -16,6 +17,14 @@ let uname =
       | Ok s when s = "FreeBSD" -> FreeBSD
       | Ok s when s = "Linux" -> Linux
       | Ok s -> invalid_arg (Printf.sprintf "OS %s not supported" s)
+      | Error (`Msg m) -> invalid_arg m)
+
+let arch =
+  let cmd = Bos.Cmd.(v "uname" % "-m") in
+  lazy (match Bos.OS.Cmd.(run_out cmd |> out_string |> success) with
+      | Ok s when s = "x86_64" -> X86_64
+      | Ok s when s = "aarch64" -> Aarch64
+      | Ok s -> invalid_arg (Printf.sprintf "arch %s not supported" s)
       | Error (`Msg m) -> invalid_arg m)
 
 (* Pure OCaml implementation of SystemD's sd_listen_fds.
@@ -318,6 +327,34 @@ let bridges_exist bridges =
        bridge_exists (device_name b))
     (Ok ()) bridges
 
+let check_qemu_binary () =
+  let name =
+    match Lazy.force arch with
+    | X86_64 -> "qemu-system-x86_64"
+    | Aarch64 -> "qemu-system-aarch64"
+  in
+  (* just looking in PATH *)
+  let* cmd = Bos.OS.Cmd.must_exist (Bos.Cmd.v name) in
+  let* () = Bos.OS.Cmd.(run_out ~err:err_null Bos.Cmd.(cmd % "--version") |> out_null |> success) in
+  Ok cmd
+
+let check_qemu (unikernel : Unikernel.config) =
+  let* () =
+    match Lazy.force uname with
+    | FreeBSD -> Error (`Msg "FreeBSD not supported for qemu")
+    | Linux -> Ok ()
+  in
+  let* () =
+    if List.is_empty unikernel.block_devices then Ok ()
+    else Error (`Msg "block devices are not supported with qemu")
+  in
+  let* () =
+    if List.length unikernel.bridges <= 1 then Ok ()
+    else Error (`Msg "only one network interface is supported with qemu")
+  in
+  let* _ = check_qemu_binary () in
+  Ok ()
+
 let prepare_bhyve name (unikernel : Unikernel.config) =
   let* disk =
     Option.to_result ~none:(`Msg "couldn't find initial block device")
@@ -360,6 +397,21 @@ let prepare name (unikernel : Unikernel.config) =
       let* target, version = solo5_image_target image in
       let* _ = check_solo5_tender target version in
       let* () = manifest_devices_match ~bridges:unikernel.Unikernel.bridges ~block_devices:unikernel.Unikernel.block_devices image in
+      let* () = Bos.OS.File.write filename image in
+      let* () = bridges_exist unikernel.Unikernel.bridges in
+      Ok digest
+    | `Qemu ->
+      let* image =
+        if unikernel.Unikernel.compressed then
+          match Vmm_compress.uncompress unikernel.Unikernel.image with
+            | Ok blob -> Ok blob
+            | Error `Msg msg -> Error (`Msg ("failed to uncompress: " ^ msg))
+        else
+          Ok unikernel.Unikernel.image
+      in
+      let filename = Name.image_file name in
+      let digest = Digestif.SHA256.(to_raw_string (digest_string image)) in
+      let* () = check_qemu unikernel in
       let* () = Bos.OS.File.write filename image in
       let* () = bridges_exist unikernel.Unikernel.bridges in
       Ok digest
@@ -466,6 +518,42 @@ let exec_bhyve _name (config : Unikernel.config) bridge_taps digest =
            % ("-c" ^ string_of_int config.numcpus)
            % ("-m" ^ string_of_int config.memory ^ "M") % digest)
 
+let exec_qemu name (config : Unikernel.config) bridge_taps _blocks =
+  let* cpuset = cpuset config.Unikernel.cpuids in
+  let* qemu = check_qemu_binary () in
+  let base_args =
+    ["-nographic"; "-nodefaults"; "-serial"; "stdio";
+     "-cpu"; "host"; "-enable-kvm"]
+  in
+  let machine = match Lazy.force arch with
+    | X86_64 -> []
+    | Aarch64 -> ["-machine"; "virt"]
+  in
+  let mem = Bos.Cmd.(v "-m" % ((string_of_int config.Unikernel.memory) ^ "M")) in
+  let kernel = Bos.Cmd.(v "-kernel" % p (Name.image_file name)) in
+  let args =
+    (* on arm64, pass argv[0] as well (always "unikernel") *)
+    let base = Option.value ~default:[] config.Unikernel.argv in
+    match Lazy.force arch with
+    | X86_64 -> base
+    | Aarch64 -> "unikernel" :: base
+  in
+  let argv =
+    match args with
+    | [] -> []
+    | xs -> ["-append"; (String.concat " " xs)]
+  in
+  let* netdev =
+    match bridge_taps with
+    | [] -> Ok []
+    | [(_ , tap, _)] ->
+      Ok ["-netdev"; "tap,id=hnet0,ifname="^tap^",vhost=off,script=no,downscript=no";
+          "-device"; "virtio-net-pci,netdev=hnet0,id=net0"]
+    | _ -> Error (`Msg "only one tap supported with qemu")
+  in
+  Ok Bos.Cmd.(of_list cpuset %% qemu %% of_list base_args %% of_list machine
+              %% mem %% of_list netdev %% kernel %% of_list argv)
+
 let exec name (config : Unikernel.config) bridge_taps blocks digest =
   let bridge_taps =
     List.map (fun (bridge, tap, mac) ->
@@ -531,6 +619,7 @@ let exec name (config : Unikernel.config) bridge_taps blocks digest =
                    "--" % p (Name.image_file name) %% of_list argv))
     | `BHyve ->
       Ok (exec_bhyve name config bridge_taps digest)
+    | `Qemu -> exec_qemu name config bridge_taps digest
   in
   let line = Bos.Cmd.to_list cmd in
   let prog = try List.hd line with Failure _ -> failwith err_empty_line in
@@ -543,7 +632,7 @@ let exec name (config : Unikernel.config) bridge_taps blocks digest =
     Logs.debug (fun m -> m "creating process");
     let pid = create_process prog line stdout in
     Logs.debug (fun m -> m "created process %d: %a" pid Bos.Cmd.pp cmd) ;
-    (* we gave a copy (well, two copies) of that file descriptor to the solo5
+    (* we gave a copy (well, two copies) of that file descriptor to the runner
        process and don't really need it here anymore... *)
     close_no_err stdout ;
     let taps = List.map (fun (_, tap, mac) -> tap, mac) bridge_taps in
