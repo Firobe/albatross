@@ -266,6 +266,7 @@ let create_unikernel typ force image startup no_add_name cpuids memory argv bloc
       in
       Ok (image, compressed)
     | `BHyve -> Ok ("", false)
+    | `Qemu -> Ok ("", false)
   in
   let argv = match argv with [] -> None | xs -> Some xs
   and fail_behaviour =

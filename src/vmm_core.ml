@@ -284,11 +284,12 @@ module Policy = struct
 end
 
 module Unikernel = struct
-  type typ = [ `Solo5 | `BHyve ]
+  type typ = [ `Solo5 | `BHyve | `Qemu]
 
   let pp_typ ppf = function
     | `Solo5 -> Fmt.pf ppf "solo5"
     | `BHyve -> Fmt.pf ppf "BHyve"
+    | `Qemu -> Fmt.pf ppf "qemu"
 
   type fail_behaviour = [ `Quit | `Restart of IS.t option ]
 
@@ -411,6 +412,8 @@ module Unikernel = struct
       Fmt.pf ppf "digest %s" (Ohex.encode digest)
     | `BHyve ->
       Fmt.pf ppf "bhyve-vmname %s" digest
+    | `Qemu ->
+      Fmt.pf ppf "qemu %s" digest
 
   let pp ppf unikernel =
     Fmt.pf ppf "pid %d@ taps %a (block %a) cmdline %a %a"

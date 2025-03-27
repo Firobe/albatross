@@ -236,7 +236,7 @@ let handle_create t name ~needs_dump unikernel_config =
   and fail () =
     (match unikernel_config.typ with
      | `BHyve -> Vmm_unix.destroy_bhyve digest |> ignore
-     | `Solo5 -> ());
+     | `Solo5 | `Qemu -> ());
     match Vmm_unix.free_system_resources name (List.map (fun (_,tap,_) -> tap) taps) with
     | Ok () -> `Failure "could not create unikernel: console failed"
     | Error (`Msg msg) ->
@@ -249,7 +249,7 @@ let handle_create t name ~needs_dump unikernel_config =
 let handle_shutdown t name unikernel r =
   (match unikernel.Unikernel.config.typ with
    | `BHyve -> Vmm_unix.destroy_bhyve unikernel.digest |> ignore
-   | `Solo5 -> ());
+   | `Solo5 | `Qemu -> ());
   (match Vmm_unix.free_system_resources name (List.map fst unikernel.Unikernel.taps) with
    | Ok () -> ()
    | Error (`Msg e) ->

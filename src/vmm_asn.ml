@@ -300,14 +300,17 @@ let typ =
   let f = function
     | `C1 () -> `Solo5
     | `C2 () -> `BHyve
+    | `C3 () -> `Qemu
   and g = function
     | `Solo5 -> `C1 ()
     | `BHyve -> `C2 ()
+    | `Qemu -> `C3 ()
   in
   Asn.S.map f g @@
-  Asn.S.(choice2
+  Asn.S.(choice3
            (my_explicit 0 ~label:"solo5" null)
-           (my_explicit 1 ~label:"bhyve" null))
+           (my_explicit 1 ~label:"bhyve" null)
+           (my_explicit 2 ~label:"qemu" null))
 
 let fail_behaviour =
   let f = function
