@@ -284,10 +284,11 @@ module Policy = struct
 end
 
 module Unikernel = struct
-  type typ = [ `Solo5 ]
+  type typ = [ `Solo5 | `Qemu ]
 
   let pp_typ ppf = function
     | `Solo5 -> Fmt.pf ppf "solo5"
+    | `Qemu -> Fmt.pf ppf "qemu"
 
   type fail_behaviour = [ `Quit | `Restart of IS.t option ]
 

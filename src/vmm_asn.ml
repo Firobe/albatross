@@ -297,9 +297,10 @@ let name =
 let typ =
   let f = function
     | `C1 () -> `Solo5
-    | `C2 () -> Asn.S.parse_error "typ not yet supported"
+    | `C2 () -> `Qemu
   and g = function
     | `Solo5 -> `C1 ()
+    | `Qemu -> `C2 ()
   in
   Asn.S.map f g @@
   Asn.S.(choice2

@@ -9,6 +9,7 @@ let dbdir = ref (Fpath.v "/nonexisting")
 let set_dbdir path = dbdir := path
 
 type supported = FreeBSD | Linux
+type arch = X86_64 | Aarch64
 
 let uname =
   let cmd = Bos.Cmd.(v "uname" % "-s") in
@@ -16,6 +17,14 @@ let uname =
       | Ok s when s = "FreeBSD" -> FreeBSD
       | Ok s when s = "Linux" -> Linux
       | Ok s -> invalid_arg (Printf.sprintf "OS %s not supported" s)
+      | Error (`Msg m) -> invalid_arg m)
+
+let arch =
+  let cmd = Bos.Cmd.(v "uname" % "-m") in
+  lazy (match Bos.OS.Cmd.(run_out cmd |> out_string |> success) with
+      | Ok s when s = "x86_64" -> X86_64
+      | Ok s when s = "aarch64" -> Aarch64
+      | Ok s -> invalid_arg (Printf.sprintf "arch %s not supported" s)
       | Error (`Msg m) -> invalid_arg m)
 
 (* Pure OCaml implementation of SystemD's sd_listen_fds.
@@ -321,10 +330,35 @@ let bridges_exist bridges =
        bridge_exists (bridge_name b))
     (Ok ()) bridges
 
+let check_qemu_binary () =
+  let name =
+    match Lazy.force arch with
+    | X86_64 -> "qemu-system-x86_64"
+    | Aarch64 -> "qemu-system-aarch64"
+  in
+  (* just looking in PATH *)
+  let* cmd = Bos.OS.Cmd.must_exist (Bos.Cmd.v name) in
+  Bos.OS.Cmd.(run_out ~err:err_null Bos.Cmd.(cmd % "--version") |> out_null |> success)
+
+let check_qemu (unikernel : Unikernel.config) =
+  let* () =
+    match Lazy.force uname with
+    | FreeBSD -> Error (`Msg "FreeBSD not supported for qemu")
+    | Linux -> Ok ()
+  in
+  let* () =
+      if List.is_empty unikernel.block_devices then Ok ()
+      else Error (`Msg "block devices are not supported with qemu")
+  in
+  check_qemu_binary ()
+
+let check_solo5 (unikernel : Unikernel.config) image =
+  let* target, version = solo5_image_target image in
+  let* _ = check_solo5_tender target version in
+  manifest_devices_match ~bridges:unikernel.Unikernel.bridges ~block_devices:unikernel.Unikernel.block_devices image
+
 let prepare name (unikernel : Unikernel.config) =
   let* image =
-    match unikernel.Unikernel.typ with
-    | `Solo5 ->
       if unikernel.Unikernel.compressed then
         match Vmm_compress.uncompress unikernel.Unikernel.image with
         | Ok blob -> Ok blob
@@ -334,9 +368,11 @@ let prepare name (unikernel : Unikernel.config) =
   in
   let filename = Name.image_file name in
   let digest = Digestif.SHA256.(to_raw_string (digest_string image)) in
-  let* target, version = solo5_image_target image in
-  let* _ = check_solo5_tender target version in
-  let* () = manifest_devices_match ~bridges:unikernel.Unikernel.bridges ~block_devices:unikernel.Unikernel.block_devices image in
+  let* () =
+    match unikernel.Unikernel.typ with
+    | `Solo5 -> check_solo5 unikernel image
+    | `Qemu -> check_qemu unikernel
+  in
   let* () = Bos.OS.File.write filename image in
   let* () = bridges_exist unikernel.Unikernel.bridges in
   let fifo = Name.fifo_file name in
@@ -389,12 +425,7 @@ let cpuset cpu =
 
 let drop_path = ref true
 
-let exec name (config : Unikernel.config) bridge_taps blocks digest =
-  let bridge_taps =
-    List.map (fun (bridge, tap, mac) ->
-        bridge, tap, Option.value mac ~default:(Name.mac name bridge))
-      bridge_taps
-  in
+let exec_solo5_cmd name (config : Unikernel.config) bridge_taps blocks =
   let net, macs =
     List.split
       (List.map (fun (bridge, tap, mac) ->
@@ -445,12 +476,25 @@ let exec name (config : Unikernel.config) bridge_taps blocks digest =
     solo5_image_target image
   in
   let* tender = check_solo5_tender target version in
-  let cmd =
-    Bos.Cmd.(of_list cpuset %% tender % mem %%
+  Ok Bos.Cmd.(of_list cpuset %% tender % mem %%
              of_list net %% of_list macs %% of_list blocks %%
              of_list (List.filter_map Fun.id block_sector_sizes) %
              "--" % p (Name.image_file name) %% of_list argv)
+
+let exec_qemu_cmd _name (_config : Unikernel.config) _bridge_taps _blocks =
+  Error (`Msg "running qemu not yet supported")
+
+let exec name (config : Unikernel.config) bridge_taps blocks digest =
+  let bridge_taps =
+    List.map (fun (bridge, tap, mac) ->
+        bridge, tap, Option.value mac ~default:(Name.mac name bridge))
+      bridge_taps
   in
+  let cmd_f = match config.typ with
+  | `Solo5 -> exec_solo5_cmd
+  | `Qemu -> exec_qemu_cmd
+  in
+  let* cmd = cmd_f name config bridge_taps blocks in
   let line = Bos.Cmd.to_list cmd in
   let prog = try List.hd line with Failure _ -> failwith err_empty_line in
   let line = Array.of_list line in
@@ -462,7 +506,7 @@ let exec name (config : Unikernel.config) bridge_taps blocks digest =
     Logs.debug (fun m -> m "creating process");
     let pid = create_process prog line stdout in
     Logs.debug (fun m -> m "created process %d: %a" pid Bos.Cmd.pp cmd) ;
-    (* we gave a copy (well, two copies) of that file descriptor to the solo5
+    (* we gave a copy (well, two copies) of that file descriptor to the runner
        process and don't really need it here anymore... *)
     close_no_err stdout ;
     let taps = List.map (fun (_, tap, mac) -> tap, mac) bridge_taps in
