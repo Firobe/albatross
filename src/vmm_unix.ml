@@ -338,7 +338,8 @@ let check_qemu_binary () =
   in
   (* just looking in PATH *)
   let* cmd = Bos.OS.Cmd.must_exist (Bos.Cmd.v name) in
-  Bos.OS.Cmd.(run_out ~err:err_null Bos.Cmd.(cmd % "--version") |> out_null |> success)
+  let* () = Bos.OS.Cmd.(run_out ~err:err_null Bos.Cmd.(cmd % "--version") |> out_null |> success) in
+  Ok cmd
 
 let check_qemu (unikernel : Unikernel.config) =
   let* () =
@@ -347,10 +348,15 @@ let check_qemu (unikernel : Unikernel.config) =
     | Linux -> Ok ()
   in
   let* () =
-      if List.is_empty unikernel.block_devices then Ok ()
-      else Error (`Msg "block devices are not supported with qemu")
+    if List.is_empty unikernel.block_devices then Ok ()
+    else Error (`Msg "block devices are not supported with qemu")
   in
-  check_qemu_binary ()
+  let* () =
+    if List.length unikernel.bridges <= 1 then Ok ()
+    else Error (`Msg "only one network interface is supported with qemu")
+  in
+  let* _ = check_qemu_binary () in
+  Ok ()
 
 let check_solo5 (unikernel : Unikernel.config) image =
   let* target, version = solo5_image_target image in
@@ -481,8 +487,34 @@ let exec_solo5_cmd name (config : Unikernel.config) bridge_taps blocks =
              of_list (List.filter_map Fun.id block_sector_sizes) %
              "--" % p (Name.image_file name) %% of_list argv)
 
-let exec_qemu_cmd _name (_config : Unikernel.config) _bridge_taps _blocks =
-  Error (`Msg "running qemu not yet supported")
+let exec_qemu_cmd name (config : Unikernel.config) bridge_taps _blocks =
+  let* cpuset = cpuset config.Unikernel.cpuid in
+  let* qemu = check_qemu_binary () in
+  let base_args =
+    ["-nographic"; "-nodefaults"; "-serial"; "stdio";
+     "-cpu"; "host"; "-enable-kvm"]
+  in
+  let machine = match Lazy.force arch with
+    | X86_64 -> []
+    | Aarch64 -> ["-machine"; "virt"]
+  in
+  let mem = Bos.Cmd.(v "-m" % ((string_of_int config.Unikernel.memory) ^ "M")) in
+  let kernel = Bos.Cmd.(v "-kernel" % p (Name.image_file name)) in
+  let argv =
+    match config.Unikernel.argv with
+    | None -> []
+    | Some xs -> ["-append"; "\"" ^ (String.concat " " xs) ^ "\""]
+  in
+  let* netdev =
+    match bridge_taps with
+    | [] -> Ok []
+    | [(_ , tap, _)] ->
+      Ok ["-netdev"; "tap,id=hnet0,ifname="^tap^",vhost=off,script=no,downscript=no";
+          "-device"; "virtio-net-pci,netdev=hnet0,id=net0"]
+    | _ -> Error (`Msg "only one tap supported with qemu")
+  in
+  Ok Bos.Cmd.(of_list cpuset %% qemu %% of_list base_args %% of_list machine
+              %% mem %% of_list netdev %% kernel %% of_list argv)
 
 let exec name (config : Unikernel.config) bridge_taps blocks digest =
   let bridge_taps =
