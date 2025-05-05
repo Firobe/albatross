@@ -502,8 +502,9 @@ let exec_qemu_cmd name (config : Unikernel.config) bridge_taps _blocks =
   let kernel = Bos.Cmd.(v "-kernel" % p (Name.image_file name)) in
   let argv =
     match config.Unikernel.argv with
-    | None -> []
-    | Some xs -> ["-append"; "\"" ^ (String.concat " " xs) ^ "\""]
+    | None
+    | Some [] -> []
+    | Some xs -> ["-append"; (String.concat " " xs)]
   in
   let* netdev =
     match bridge_taps with
@@ -527,6 +528,7 @@ let exec name (config : Unikernel.config) bridge_taps blocks digest =
   | `Qemu -> exec_qemu_cmd
   in
   let* cmd = cmd_f name config bridge_taps blocks in
+  Logs.info (fun m -> m "cmd: %a" Bos.Cmd.pp cmd);
   let line = Bos.Cmd.to_list cmd in
   let prog = try List.hd line with Failure _ -> failwith err_empty_line in
   let line = Array.of_list line in
