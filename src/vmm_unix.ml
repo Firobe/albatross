@@ -533,8 +533,9 @@ let exec_qemu name (config : Unikernel.config) bridge_taps _blocks =
   let kernel = Bos.Cmd.(v "-kernel" % p (Name.image_file name)) in
   let argv =
     match config.Unikernel.argv with
-    | None -> []
-    | Some xs -> ["-append"; "\"" ^ (String.concat " " xs) ^ "\""]
+    | None
+    | Some [] -> []
+    | Some xs -> ["-append"; (String.concat " " xs)]
   in
   let* netdev =
     match bridge_taps with
