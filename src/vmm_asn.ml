@@ -359,8 +359,10 @@ let v0_unikernel_config =
     and startup = None
     and fail_behaviour = `Quit (* TODO maybe set to restart by default :) *)
     and add_name = true
+    and isolated = false
     in
-    { typ ; compressed ; image ; fail_behaviour ; startup ; add_name ; cpuid ; memory ; block_devices ; bridges ; argv }
+    { typ ; compressed ; image ; fail_behaviour ; startup; add_name; cpuid ; memory ; block_devices
+    ; bridges ; argv; isolated }
   and g _unikernel = failwith "cannot encode v0 unikernel configs"
   in
   Asn.S.map f g @@
@@ -381,8 +383,10 @@ let v1_unikernel_config =
     and block_devices = match blocks with None -> [] | Some xs -> List.map (fun b -> b, None, None) xs
     and startup = None
     and add_name = true
+    and isolated = false
     in
-    { typ ; compressed ; image ; fail_behaviour ; startup ; add_name ; cpuid ; memory ; block_devices ; bridges ; argv }
+    { typ ; compressed ; image ; fail_behaviour ; startup ; add_name ; cpuid ;
+    memory ; block_devices ; bridges ; argv; isolated }
   and g _unikernel = failwith "cannot encode v1 unikernel configs"
   in
   Asn.S.(map f g @@ sequence @@
@@ -404,7 +408,8 @@ let v2_unikernel_config =
     and startup = None
     and add_name = true
     in
-    { typ ; compressed ; image ; fail_behaviour ; startup ; add_name ; cpuid ; memory ; block_devices ; bridges ; argv }
+    { typ ; compressed ; image ; fail_behaviour ; startup ; add_name ; cpuid ;
+    memory ; block_devices ; bridges ; argv; isolated = false }
   and g (unikernel : config) =
     let bridges =
       match unikernel.bridges with
@@ -433,18 +438,22 @@ let v2_unikernel_config =
 
 let v3_unikernel_config =
   let open Unikernel in
-  let f (typ, (compressed, (image, (fail_behaviour, (cpuid, (memory, (blocks, (bridges, argv)))))))) =
+  let f (typ, (compressed, (image, (fail_behaviour, (cpuid, (memory, (blocks,
+  (bridges, (argv, isolated))))))))) =
     let bridges = match bridges with None -> [] | Some xs -> xs
     and block_devices = match blocks with None -> [] | Some xs -> xs
     and startup = None
     and add_name = true
     in
-    { typ ; compressed ; image ; fail_behaviour ; startup ; add_name ; cpuid ; memory ; block_devices ; bridges ; argv }
+    { typ ; compressed ; image ; fail_behaviour ; startup ; add_name ; cpuid ;
+    memory ; block_devices ; bridges ; argv; isolated }
   and g (unikernel : config) =
     let bridges = match unikernel.bridges with [] -> None | xs -> Some xs
     and blocks = match unikernel.block_devices with [] -> None | xs -> Some xs
     in
-    (unikernel.typ, (unikernel.compressed, (unikernel.image, (unikernel.fail_behaviour, (unikernel.cpuid, (unikernel.memory, (blocks, (bridges, unikernel.argv))))))))
+    (unikernel.typ, (unikernel.compressed, (unikernel.image,
+    (unikernel.fail_behaviour, (unikernel.cpuid, (unikernel.memory, (blocks,
+    (bridges, (unikernel.argv, unikernel.isolated)))))))))
   in
   Asn.S.(map f g @@ sequence @@
            (required ~label:"typ" typ)
@@ -465,20 +474,26 @@ let v3_unikernel_config =
                                 (required ~label:"netif" utf8_string)
                                 (optional ~label:"bridge" utf8_string)
                                 (optional ~label:"mac" mac_addr)))))
-        -@ (optional ~label:"arguments"(my_explicit 2 (sequence_of utf8_string))))
+        @ (optional ~label:"arguments"(my_explicit 2 (sequence_of utf8_string)))
+        -@ (required ~label:"isolated" bool)
+        )
 
 let unikernel_config =
   let open Unikernel in
-  let f (typ, (compressed, (image, (startup, (add_name, (fail_behaviour, (cpuid, (memory, (blocks, (bridges, argv)))))))))) =
+  let f (typ, (compressed, (image, (startup, (add_name, (fail_behaviour, (cpuid,
+  (memory, (blocks, (bridges, (argv, isolated))))))))))) =
     let bridges = match bridges with None -> [] | Some xs -> xs
     and block_devices = match blocks with None -> [] | Some xs -> xs
     in
-    { typ ; compressed ; image ; fail_behaviour ; startup ; add_name ; cpuid ; memory ; block_devices ; bridges ; argv }
+    { typ ; compressed ; image ; fail_behaviour ; startup ; add_name ; cpuid ;
+    memory ; block_devices ; bridges ; argv; isolated }
   and g (unikernel : config) =
     let bridges = match unikernel.bridges with [] -> None | xs -> Some xs
     and blocks = match unikernel.block_devices with [] -> None | xs -> Some xs
     in
-    (unikernel.typ, (unikernel.compressed, (unikernel.image, (unikernel.startup, (unikernel.add_name, (unikernel.fail_behaviour, (unikernel.cpuid, (unikernel.memory, (blocks, (bridges, unikernel.argv))))))))))
+    (unikernel.typ, (unikernel.compressed, (unikernel.image, (unikernel.startup,
+    (unikernel.add_name, (unikernel.fail_behaviour, (unikernel.cpuid,
+    (unikernel.memory, (blocks, (bridges, (unikernel.argv, unikernel.isolated)))))))))))
   in
   Asn.S.(map f g @@ sequence @@
            (required ~label:"typ" typ)
@@ -501,7 +516,9 @@ let unikernel_config =
                                 (required ~label:"netif" utf8_string)
                                 (optional ~label:"bridge" utf8_string)
                                 (optional ~label:"mac" mac_addr)))))
-        -@ (optional ~label:"arguments"(my_explicit 2 (sequence_of utf8_string))))
+        @ (optional ~label:"arguments"(my_explicit 2 (sequence_of utf8_string)))
+        -@ (required ~label:"isolated" bool)
+        )
 
 let unikernel_arguments =
   let open Unikernel in

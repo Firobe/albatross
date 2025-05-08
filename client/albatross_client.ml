@@ -229,7 +229,9 @@ let prepare_update ~happy_eyeballs level host dryrun = function
                 | 0 -> false, unikernel
                 | _ -> true, Vmm_compress.compress ~level unikernel
               in
-              let config = { Vmm_core.Unikernel.typ ; compressed ; image ; fail_behaviour ; startup ; add_name = true; cpuid; memory ; block_devices ; bridges ; argv } in
+              let config = { Vmm_core.Unikernel.typ ; compressed ; image ;
+              fail_behaviour ; startup ; add_name = true; cpuid; memory ;
+              block_devices ; bridges ; argv; isolated = false } in
               Lwt.return (Ok (`Unikernel_force_create config))
     end
   | Ok w ->
@@ -265,7 +267,9 @@ let create_unikernel force image startup no_add_name cpuid memory argv block_dev
     let exits = match exit_codes with [] -> None | xs -> Some (Vmm_core.IS.of_list xs) in
     if restart_on_fail then `Restart exits else `Quit
   in
-  let config = { Vmm_core.Unikernel.typ = `Solo5 ; compressed ; image ; fail_behaviour ; startup ; add_name = not no_add_name ; cpuid ; memory ; block_devices ; bridges ; argv } in
+  let config = { Vmm_core.Unikernel.typ = `Solo5 ; compressed ; image ;
+  fail_behaviour ; startup ; add_name = not no_add_name ; cpuid ; memory ;
+  block_devices ; bridges ; argv; isolated = false } in
   if force then Ok (`Unikernel_force_create config) else Ok (`Unikernel_create config)
 
 let policy unikernels memory cpus block bridgesl =

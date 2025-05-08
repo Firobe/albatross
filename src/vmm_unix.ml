@@ -53,7 +53,7 @@ let check_commands () =
   let* _ = Bos.OS.Cmd.must_exist uname_cmd in
   let cmds =
     match Lazy.force uname with
-    | Linux -> [ "ip" ; "taskset" ]
+    | Linux -> [ "ip" ; "bridge"; "taskset" ]
     | FreeBSD -> [ "ifconfig" ; "cpuset" ]
   in
   let* _ =
@@ -171,7 +171,7 @@ let rec fifo_exists file =
     Error (`Msg (Fmt.str "file %a exists: %s" Fpath.pp file
                    (Unix.error_message e)))
 
-let create_tap bridge =
+let create_tap ~isolated bridge =
   match Lazy.force uname with
   | FreeBSD ->
     let cmd = Bos.Cmd.(v "ifconfig" % "tap" % "create") in
@@ -197,6 +197,11 @@ let create_tap bridge =
     let* () = Bos.OS.Cmd.run Bos.Cmd.(v "ip" % "tuntap" % "add" % tap % "mode" % "tap") in
     let* () = Bos.OS.Cmd.run Bos.Cmd.(v "ip" % "link" % "set" % "dev" % tap % "up") in
     let* () = Bos.OS.Cmd.run Bos.Cmd.(v "ip" % "link" % "set" % "dev" % tap % "master" % bridge) in
+    let* () = if isolated then (
+    Bos.OS.Cmd.run Bos.Cmd.(
+        v "bridge" % "link"% "set" % "dev" % tap % "isolated" % "on"
+    )) else Ok ()
+    in
     Ok tap
 
 let destroy_tap tap =
@@ -402,7 +407,7 @@ let prepare name (unikernel : Unikernel.config) =
     List.fold_left (fun acc arg ->
         let* acc = acc in
         let bridge = bridge_name arg in
-        let* tap = create_tap bridge in
+        let* tap = create_tap ~isolated:unikernel.isolated bridge in
         let (service, _, mac) = arg in
         Ok ((service, tap, mac) :: acc))
       (Ok []) unikernel.Unikernel.bridges

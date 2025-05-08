@@ -302,6 +302,7 @@ module Unikernel = struct
   type config = {
     typ : typ ;
     compressed : bool ;
+    isolated : bool;
     image : string ;
     fail_behaviour : fail_behaviour;
     startup : int option ;
