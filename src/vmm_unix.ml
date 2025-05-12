@@ -505,11 +505,17 @@ let exec_qemu_cmd name (config : Unikernel.config) bridge_taps _blocks =
   in
   let mem = Bos.Cmd.(v "-m" % ((string_of_int config.Unikernel.memory) ^ "M")) in
   let kernel = Bos.Cmd.(v "-kernel" % p (Name.image_file name)) in
+  let args =
+    (* on arm64, pass argv[0] as well (always "unikernel") *)
+    let base = Option.value ~default:[] config.Unikernel.argv in
+    match Lazy.force arch with
+    | X86_64 -> base
+    | Aarch64 -> "unikernel" :: base
+  in
   let argv =
-    match config.Unikernel.argv with
-    | None
-    | Some [] -> []
-    | Some xs -> ["-append"; (String.concat " " xs)]
+    match args with
+    | [] -> []
+    | xs -> ["-append"; (String.concat " " xs)]
   in
   let* netdev =
     match bridge_taps with
